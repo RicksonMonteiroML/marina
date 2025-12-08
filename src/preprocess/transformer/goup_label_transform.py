@@ -65,15 +65,15 @@ class GroupLabelTransformer(BaseTransformer):
 
         Example output:
             [
-                { "id": 0, "name": "fossil" },
-                { "id": 1, "name": "fragment" }
+                { "id": 1, "name": "fossil" },
+                { "id": 2, "name": "fragment" }
             ]
         """
         group_names = sorted(self.group_map.keys())
 
         return [
             {"id": idx, "name": gname}
-            for idx, gname in enumerate(group_names)
+            for idx, gname in enumerate(group_names, start=1) # COCO format IDs start at 1
         ]
 
     # ------------------------------------------------------------------
@@ -104,6 +104,7 @@ class GroupLabelTransformer(BaseTransformer):
             new_ann = ann.copy()
             new_ann["id"] = next_ann_id
             new_ann["category_id"] = name_to_id[group_name]
+            new_ann["category_name"] = group_name
 
             new_annotations.append(new_ann)
             next_ann_id += 1
