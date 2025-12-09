@@ -153,6 +153,6 @@ class CrossValidator:
 
             fold_dirs.append(self.save_fold(fold_idx, train_ids, val_ids))
 
-        print("\n✅ Cross-validation completo com statistics!\n")
+        print("\nCross-validation completo com statistics!\n")
 
         return fold_dirs

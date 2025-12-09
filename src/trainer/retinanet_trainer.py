@@ -2,7 +2,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import time
-from typing import Dict, Any, Tuple, List
+from typing import Tuple
 
 import torch
 import torch.optim as optim
@@ -20,12 +20,34 @@ from pycocotools.cocoeval import COCOeval
 
 from src.dataset.coco_dataset import CocoDatasetXYXY
 from src.trainer.utils import collate_fn, save_metrics
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
+import torchvision.transforms as T
+
+from src.dataset.transforms.retina_transform import RetinaTransform
+
+def warmup_lr(optimizer, step, warmup_steps, base_lr, start_factor=0.1):
+    """Warmup linear por step: começa em base_lr * start_factor e sobe até base_lr."""
+    if step >= warmup_steps:
+        return
+
+    alpha = step / warmup_steps
+    scale = start_factor + alpha * (1.0 - start_factor)
+
+    for pg in optimizer.param_groups:
+        pg["lr"] = base_lr * scale
+
+
+def get_retina_train_transforms(size=640):
+    return T.Compose([
+        T.Resize((size, size)),   # simples e consistente
+        T.ToTensor(),
+        T.Normalize(mean=[0.485, 0.456, 0.406],
+                    std=[0.229, 0.224, 0.225]),
+    ])
 
 
 class RetinaNetTrainer:
-    """
-    Trainer para RetinaNet, compatível com o mesmo fluxo do FasterRCNNTrainer.
-    """
 
     def __init__(self, training_cfg, model_cfg, fold_dir, train_json, val_json):
         self.training_cfg = training_cfg or {}
@@ -38,16 +60,16 @@ class RetinaNetTrainer:
         self.val_json = str(val_json)
 
         # ---------------- HYPERPARAMS ----------------
-        self.batch_size = int(self.model_cfg.get("batch_size", self.training_cfg.get("batch_size", 4)))
-        self.num_epochs = int(self.model_cfg.get("num_epochs", self.training_cfg.get("num_epochs", 200)))
-        self.lr = float(self.model_cfg.get("learning_rate", self.training_cfg.get("learning_rate", 0.005)))
+        self.batch_size = int(self.training_cfg.get("batch_size", 16))
+        self.num_epochs = int(self.training_cfg.get("num_epochs", 100))
+        self.lr = float(self.training_cfg.get("learning_rate", 0.01))
 
         self.weight_decay = float(self.training_cfg.get("weight_decay", 5e-4))
         self.momentum = float(self.training_cfg.get("momentum", 0.9))
 
         self.scheduler_step = int(self.training_cfg.get("scheduler_step_size", 10))
-        self.scheduler_gamma = float(self.training_cfg.get("scheduler_gamma", 0.1))
-
+        self.scheduler_gamma = float(self.training_cfg.get("scheduler_gamma", 0.97))
+        self.warmup_epochs = int(self.training_cfg.get("warmup_epochs", 3))
         self.patience = int(self.training_cfg.get("early_stop", {}).get("patience", 10))
 
         self.score_threshold = float(self.training_cfg.get("score_threshold", 0.05))
@@ -63,16 +85,15 @@ class RetinaNetTrainer:
         self.optimizer = None
         self.scheduler = None
 
-    # -------------------------------------------------------------------------
     def create_model(self):
-        num_classes = int(self.model_cfg.get("num_classes", )) +1  # +1 for background
+        num_classes = int(self.model_cfg.get("num_classes", )) +1
         pretrained = bool(self.model_cfg.get("pretrained", True))
 
         weights = RetinaNet_ResNet50_FPN_V2_Weights.DEFAULT if pretrained else None
 
         model = retinanet_resnet50_fpn_v2(weights=weights)
 
-        # Replace classification head exactly like torchvision recommends
+        # Replace classification head like torchvision recommends
         model.head.classification_head = RetinaNetClassificationHead(
             in_channels=model.backbone.out_channels,
             num_anchors=model.head.classification_head.num_anchors,
@@ -130,7 +151,7 @@ class RetinaNetTrainer:
                     "labels": pred["labels"].cpu().tolist(),
                 })
         return outputs
-
+    
     # -------------------------------------------------------------------------
     def postprocess(self, out):
         boxes = torch.tensor(out["boxes"], dtype=torch.float32)
@@ -193,22 +214,32 @@ class RetinaNetTrainer:
 
         return mAP, ap50, recall
 
-    # -------------------------------------------------------------------------
     def train(self) -> Tuple[float, Path]:
         self.model = self.create_model().to(self.device)
 
+        # --------------------- OPTIMIZER ---------------------
         self.optimizer = optim.SGD(
             self.model.parameters(),
             lr=self.lr,
             momentum=self.momentum,
             weight_decay=self.weight_decay,
         )
-        self.scheduler = torch.optim.lr_scheduler.StepLR(
-            self.optimizer, step_size=self.scheduler_step, gamma=self.scheduler_gamma
+
+        # --------------------- SCHEDULER ---------------------
+        self.scheduler = torch.optim.lr_scheduler.ExponentialLR(
+            self.optimizer,
+            gamma=self.scheduler_gamma
         )
+
         scaler = GradScaler()
 
         train_loader, val_loader = self.get_dataloaders()
+
+        # --------------------- WARMUP CONFIG ---------------------
+        warmup_epochs = 2
+        warmup_steps = len(train_loader) * warmup_epochs
+        global_step = 0
+        base_lr = self.lr
 
         best_map = 0.0
         patience_count = 0
@@ -217,6 +248,7 @@ class RetinaNetTrainer:
 
         print(f"\nIniciando treino RetinaNet — device: {self.device}")
 
+        # --------------------- EPOCH LOOP ---------------------
         for epoch in range(1, self.num_epochs + 1):
 
             epoch_start = time.time()
@@ -225,15 +257,26 @@ class RetinaNetTrainer:
             total_loss = 0.0
             iters = 0
 
+            # --------------------- TRAIN LOOP ---------------------
             for imgs, tgts in train_loader:
-                imgs = [img.to(self.device) for img in imgs]
-                tgts = [
-                    {"boxes": t["boxes"].to(self.device), "labels": t["labels"].to(self.device)}
-                    for t in tgts if len(t["boxes"]) > 0
-                ]
+                # imgs: list[PIL->tensor], tgts: list[dict]
+                # primeiro mova imagens p/ device but keep pairing
+                paired = []
+                for img, tgt in zip(imgs, tgts):
+                    # Some datasets might have boxes stored as list; ensure tensor
+                    if "boxes" in tgt and len(tgt["boxes"]) > 0:
+                        img_dev = img.to(self.device)
+                        tgt_dev = {
+                            "boxes": tgt["boxes"].to(self.device),
+                            "labels": tgt["labels"].to(self.device)
+                        }
+                        paired.append((img_dev, tgt_dev))
 
-                if len(tgts) == 0:
+                if len(paired) == 0:
                     continue
+
+                imgs = [p[0] for p in paired]
+                tgts = [p[1] for p in paired]
 
                 self.optimizer.zero_grad()
 
@@ -245,6 +288,12 @@ class RetinaNetTrainer:
                 scaler.step(self.optimizer)
                 scaler.update()
 
+                # --------------------- WARMUP POR STEP ---------------------
+                if global_step < warmup_steps:
+                    warmup_lr(self.optimizer, global_step, warmup_steps, base_lr)
+
+                global_step += 1
+
                 total_loss += loss.item()
                 iters += 1
 
@@ -252,9 +301,11 @@ class RetinaNetTrainer:
             history["train_loss"].append(avg_loss)
             history["lr"].append(self.optimizer.param_groups[0]["lr"])
 
-            self.scheduler.step()
+            # --------------------- SCHEDULER APÓS WARMUP ---------------------
+            if global_step >= warmup_steps:
+                self.scheduler.step()
 
-            # ---------------- VALIDATION ----------------
+            # --------------------- VALIDATION ---------------------
             raw_preds = self._get_raw_predictions(self.model, val_loader)
             mAP, ap50, recall = self._compute_metrics_from_raw(raw_preds, self.val_json)
 
@@ -264,6 +315,7 @@ class RetinaNetTrainer:
 
             print(f"Epoch {epoch}/{self.num_epochs} — Loss: {avg_loss:.4f} — mAP = {mAP:.4f}")
             save_metrics(self.fold_dir, history)
+
             torch.save(self.model.state_dict(), self.models_dir / "last.pth")
 
             if mAP > best_map:

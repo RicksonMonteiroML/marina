@@ -7,15 +7,13 @@ model_cfg:
   pretrained: true
   img_dir: "data/canonical/images/canonical"
   num_classes: 16
-  batch_size: 8
-  num_epochs: 150
-  learning_rate: 0.002
 
 training:
   batch_size: 16
-  num_epochs: 40
-  learning_rate: 0.002
-
+  num_epochs: 100
+  learning_rate: 0.01
+  scheduler_gamma: 0.97
+  warmup_epochs: 3
   weight_decay: 0.0005
   momentum: 0.9
 

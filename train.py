@@ -8,7 +8,6 @@ from pathlib import Path
 from src.pipeline.training_pipeline import TrainingPipeline
 from src.trainer.utils import set_seed_everything, load_yaml
 
-set_seed_everything(42)
 
 def main():
     parser = argparse.ArgumentParser(description="Unified training runner")
@@ -28,15 +27,15 @@ def main():
     if not config.exists():
         raise FileNotFoundError(f"Config file not found: {config}")
 
-    print(f"\nIniciando pipeline com config: {config}")
+    print(f"\nIniciando cross-validation com config: {config}")
     full_yaml = load_yaml(config)  # Apenas para validar o YAML
     print(full_yaml)
     for model, config_path in full_yaml.items():
         print(f" - Modelo configurado: {model}")
         print(f" - Configuração: {config_path}")
-    pipeline = TrainingPipeline(config_path=config_path)
-    pipeline.run()
-
+        pipeline = TrainingPipeline(config_path=config_path)
+        pipeline.run()
 
 if __name__ == "__main__":
+    set_seed_everything(42)
     main()

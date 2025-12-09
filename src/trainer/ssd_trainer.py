@@ -53,6 +53,19 @@ def get_val_transforms(size=320):
         ToTensorV2(),
     ], bbox_params=A.BboxParams(format="pascal_voc", label_fields=["class_labels"]))
 
+def warmup_lr(optimizer, step, warmup_steps, base_lr, start_factor=0.1):
+    """
+    Ajusta o LR durante o warmup.
+    - Começa com base_lr * start_factor e sobe linearmente até base_lr.
+    """
+    if step >= warmup_steps:
+        return
+
+    alpha = step / warmup_steps
+    scale = start_factor + alpha * (1.0 - start_factor)
+
+    for pg in optimizer.param_groups:
+        pg["lr"] = base_lr * scale
 
 
 class SSDLiteTrainer:
@@ -72,19 +85,19 @@ class SSDLiteTrainer:
         self.val_json = str(val_json)
 
         # ---------------- HYPERPARAMS ----------------
-        self.batch_size = int(self.model_cfg.get("batch_size", self.training_cfg.get("batch_size", 4)))
-        self.num_epochs = int(self.model_cfg.get("num_epochs", self.training_cfg.get("num_epochs", 200)))
-        self.lr = float(self.model_cfg.get("learning_rate", self.training_cfg.get("learning_rate", 0.005)))
+        self.batch_size = int(self.training_cfg.get("batch_size", 16))
+        self.num_epochs = int(self.training_cfg.get("num_epochs", 100))
+        self.lr = float(self.training_cfg.get("learning_rate", 0.01))
 
         self.weight_decay = float(self.training_cfg.get("weight_decay", 5e-4))
         self.momentum = float(self.training_cfg.get("momentum", 0.9))
 
         self.scheduler_step = int(self.training_cfg.get("scheduler_step_size", 10))
-        self.scheduler_gamma = float(self.training_cfg.get("scheduler_gamma", 0.1))
-
+        self.scheduler_gamma = float(self.training_cfg.get("scheduler_gamma", 0.97))
+        self.warmup_epochs = int(self.training_cfg.get("warmup_epochs", 3))
         self.patience = int(self.training_cfg.get("early_stop", {}).get("patience", 10))
 
-        self.score_threshold = float(self.training_cfg.get("score_threshold", 0.25))
+        self.score_threshold = float(self.training_cfg.get("score_threshold", 0.05))
         self.nms_iou = float(self.training_cfg.get("nms_iou", 0.5))
         self.max_dets = int(self.training_cfg.get("max_dets", 200))
 
@@ -120,7 +133,7 @@ class SSDLiteTrainer:
             num_classes=num_classes
         )
 
-        model = self._replace_ssd_head(model, num_classes)
+        # model = self._replace_ssd_head(model, num_classes)
         return model
 
     # -------------------------------------------------------------------------
@@ -258,30 +271,40 @@ class SSDLiteTrainer:
 
         return mAP, ap50, recall
 
-    # -------------------------------------------------------------------------
     def train(self) -> Tuple[float, Path]:
         self.model = self.create_model().to(self.device)
 
+        # ---------------- OPTIMIZER ----------------
         self.optimizer = optim.SGD(
             self.model.parameters(),
             lr=self.lr,
             momentum=self.momentum,
             weight_decay=self.weight_decay,
         )
-        self.scheduler = torch.optim.lr_scheduler.StepLR(
-            self.optimizer, step_size=self.scheduler_step, gamma=self.scheduler_gamma
+
+        # ---------------- SCHEDULER NOVO (EXPONENTIAL) ----------------
+        self.scheduler = torch.optim.lr_scheduler.ExponentialLR(
+            self.optimizer, gamma=0.97
         )
+
         scaler = GradScaler()
 
         train_loader, val_loader = self.get_dataloaders()
 
+
+        warmup_steps = len(train_loader) * self.warmup_epochs
+        global_step = 0
+        base_lr = self.lr
+
+        # ---------- LOGS ----------
+        history = {"train_loss": [], "map": [], "precision": [], "recall": [], "lr": []}
+
         best_map = 0.0
         patience_count = 0
 
-        history = {"train_loss": [], "map": [], "precision": [], "recall": [], "lr": []}
-
         print(f"\nIniciando treino SSDLite — device: {self.device}")
 
+        # -------------------------------------------------------------------------
         for epoch in range(1, self.num_epochs + 1):
             epoch_start = time.time()
             self.model.train()
@@ -289,6 +312,7 @@ class SSDLiteTrainer:
             total_loss = 0.0
             iters = 0
 
+            # ===================== TRAIN LOOP ======================
             for imgs, tgts in train_loader:
                 imgs = [img.to(self.device) for img in imgs]
 
@@ -309,16 +333,26 @@ class SSDLiteTrainer:
                 scaler.step(self.optimizer)
                 scaler.update()
 
+                # ---------------------- WARMUP ----------------------
+                if global_step < warmup_steps:
+                    warmup_lr(self.optimizer, global_step, warmup_steps, base_lr)
+
+                global_step += 1
+
                 total_loss += loss.item()
                 iters += 1
 
             avg_loss = total_loss / iters if iters > 0 else float("nan")
             history["train_loss"].append(avg_loss)
             history["lr"].append(self.optimizer.param_groups[0]["lr"])
-            epoch_time = time.time() - epoch_start
-            self.scheduler.step()
 
-            # ---------------- VALIDATION ----------------
+            # ------------------- SCHEDULER DEPOIS DO WARMUP -------------------
+            if global_step >= warmup_steps:
+                self.scheduler.step()
+
+            epoch_time = time.time() - epoch_start
+
+            # ===================== VALIDATION ======================
             raw_preds = self._get_raw_predictions(self.model, val_loader)
             current_map, precision, recall = self._compute_metrics_from_raw(raw_preds, self.val_json)
 
@@ -328,6 +362,7 @@ class SSDLiteTrainer:
 
             print(f"Epoch {epoch}/{self.num_epochs} — Loss: {avg_loss:.4f} — mAP = {current_map:.4f} — time: {epoch_time:.1f}s")
             save_metrics(self.fold_dir, history)
+
             torch.save(self.model.state_dict(), self.models_dir / "last.pth")
 
             if current_map > best_map:
@@ -343,6 +378,7 @@ class SSDLiteTrainer:
                 print("\nEarly stopping ativado.")
                 break
 
+        # ------------------- FINAL -----------------------------
         save_metrics(self.fold_dir, history)
 
         best_path = (

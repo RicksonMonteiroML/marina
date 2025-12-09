@@ -1,4 +1,3 @@
-# src/trainers/frcnn_trainer.py
 from __future__ import annotations
 from pathlib import Path
 import json
@@ -17,14 +16,30 @@ from torchvision.models.detection import FasterRCNN_ResNet50_FPN_Weights
 from torchvision.ops import batched_nms
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
-# dataset expected to exist (from previous steps)
+from torch.cuda.amp import autocast, GradScaler
+
 from src.dataset.coco_dataset import CocoDatasetXYXY
 from src.trainer.utils import collate_fn, save_metrics
+
+
+
+def warmup_lr(optimizer, step, warmup_steps, base_lr, start_factor=0.1):
+    """
+    Ajusta o LR durante o warmup.
+    - Começa com base_lr * start_factor e sobe linearmente até base_lr.
+    """
+    if step >= warmup_steps:
+        return
+
+    alpha = step / warmup_steps
+    scale = start_factor + alpha * (1.0 - start_factor)
+
+    for pg in optimizer.param_groups:
+        pg["lr"] = base_lr * scale
 
 class FasterRCNNTrainer:
     """
     Trainer específico para Faster R-CNN.
-    Contrato:
         - Ao final de `train()` retorna (best_map: float, best_model_path: Path)
         - Salva metrics.json em fold_dir
         - Salva checkpoints em fold_dir/models/{last.pth, best.pth}
@@ -48,17 +63,17 @@ class FasterRCNNTrainer:
         self.val_json = str(val_json)
 
         # hyperparams (order of precedence: model_cfg -> training_cfg -> default)
-        self.batch_size = int(self.training_cfg.get("batch_size", 8))
-        self.num_epochs = int(self.training_cfg.get("num_epochs", 200))
-        self.lr = float(self.training_cfg.get("learning_rate", 0.005))
+        self.batch_size = int(self.training_cfg.get("batch_size", 16))
+        self.num_epochs = int(self.training_cfg.get("num_epochs", 100))
+        self.lr = float(self.training_cfg.get("learning_rate", 0.01))
         self.weight_decay = float(self.training_cfg.get("weight_decay", 5e-4))
         self.momentum = float(self.training_cfg.get("momentum", 0.9))
         self.warmup_epochs = int(self.training_cfg.get("warmup_epochs", 0))
         self.scheduler_step = int(self.training_cfg.get("scheduler_step_size", 10))
-        self.scheduler_gamma = float(self.training_cfg.get("scheduler_gamma", 0.1))
+        self.scheduler_gamma = float(self.training_cfg.get("scheduler_gamma", 0.97))
         self.patience = int(self.training_cfg.get("early_stop", {}).get("patience", 10))
 
-        self.score_threshold = float(self.training_cfg.get("score_threshold", 0.001))
+        self.score_threshold = float(self.training_cfg.get("score_threshold", 0.05))
         self.nms_iou = float(self.training_cfg.get("nms_iou", 0.5))
         self.max_dets = int(self.training_cfg.get("max_dets", 200))
 
@@ -98,26 +113,6 @@ class FasterRCNNTrainer:
         Espera que train_json/val_json estejam completos (COCO-style).
         """
         img_dir = self.model_cfg.get("img_dir", "data/canonical/images/canonical")
-        # train_transforms = A.Compose([
-        #     A.HorizontalFlip(p=0.5),
-
-        #     A.Resize(640, 640),
-        #     A.Normalize(
-        #         mean=(0.485, 0.456, 0.406),
-        #         std=(0.229, 0.224, 0.225),
-        #     ),
-        #     ToTensorV2(),
-        # ], bbox_params=A.BboxParams(format="pascal_voc", label_fields=["labels"]))
-
-        # val_transforms = A.Compose([
-        #     A.Resize(640, 640),
-        #     A.Normalize(
-        #         mean=(0.485, 0.456, 0.406),
-        #         std=(0.229, 0.224, 0.225),
-        #     ),
-        #     ToTensorV2(),
-        # ], bbox_params=A.BboxParams(format="pascal_voc", label_fields=["labels"]))
-
         train_ds = CocoDatasetXYXY(img_dir, self.train_json, transforms=None)
         val_ds = CocoDatasetXYXY(img_dir, self.val_json, transforms=None)
 
@@ -143,18 +138,7 @@ class FasterRCNNTrainer:
         )
 
         return train_loader, val_loader
-
-    # ----------------------------
-    def apply_warmup(self, epoch: int):
-        """Linear warmup on lr for first self.warmup_epochs epochs."""
-        if self.warmup_epochs <= 0:
-            return
-        if epoch <= self.warmup_epochs:
-            warm_lr = self.lr * (epoch / max(1, self.warmup_epochs))
-            for g in self.optimizer.param_groups:
-                g["lr"] = warm_lr
-
-    # ----------------------------
+    
     @torch.no_grad()
     def _get_raw_predictions(self, model: torch.nn.Module, loader: DataLoader) -> List[Dict[str, Any]]:
         """Inference loop: retorna lista de dicts {image_id, orig_size, boxes, scores, labels}."""
@@ -259,42 +243,71 @@ class FasterRCNNTrainer:
         torch.save(self.model.state_dict(), path)
         return path
 
-    # ----------------------------
+        # ----------------------------
     def train(self) -> Tuple[float, Path]:
-        """Loop principal de treino. Retorna (best_map, best_model_path)."""
-        # cria model/otim/ scheduler
         self.model = self.create_model().to(self.device)
-        self.optimizer = optim.SGD(self.model.parameters(), lr=self.lr, momentum=self.momentum, weight_decay=self.weight_decay)
-        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=self.scheduler_step, gamma=self.scheduler_gamma)
+
+        self.optimizer = optim.SGD(
+            self.model.parameters(),
+            lr=self.lr,
+            momentum=self.momentum,
+            weight_decay=self.weight_decay,
+        )
+
+        self.scheduler = torch.optim.lr_scheduler.ExponentialLR(
+            self.optimizer, gamma=0.97
+        )
+
+        scaler = GradScaler()
 
         train_loader, val_loader = self.get_dataloaders()
 
+        # ------------------- WARMUP CONFIG -------------------
+        warmup_epochs = 2
+        warmup_steps = len(train_loader) * warmup_epochs
+        global_step = 0
+        base_lr = self.lr
+
         best_map = 0.0
         patience_count = 0
-        history = {"train_loss": [], "map": [], "precision": [], "recall": [], "lr": []}   
 
-        print(f"\nIniciando treino Faster R-CNN — device: {self.device}")
+        history = {"train_loss": [], "map": [], "precision": [], "recall": [], "lr": []}
+
+        print(f"\nIniciando treino FRCNN — device: {self.device}")
+
         for epoch in range(1, self.num_epochs + 1):
             epoch_start = time.time()
             self.model.train()
 
-            # warmup
-            self.apply_warmup(epoch)
-
             total_loss = 0.0
             iters = 0
 
+            # ---------------------- TRAIN LOOP ----------------------
             for imgs, tgts in train_loader:
                 imgs = [img.to(self.device) for img in imgs]
-                targets_list = [{"boxes": t["boxes"].to(self.device), "labels": t["labels"].to(self.device)} for t in tgts if len(t["boxes"]) > 0]
-                if len(targets_list) == 0:
+
+                tgts = [
+                    {"boxes": t["boxes"].to(self.device), "labels": t["labels"].to(self.device)}
+                    for t in tgts if len(t["boxes"]) > 0
+                ]
+                if len(tgts) == 0:
                     continue
 
                 self.optimizer.zero_grad()
-                loss_dict = self.model(imgs, targets_list)
-                loss = sum(loss_dict.values())
-                loss.backward()
-                self.optimizer.step()
+
+                with autocast():
+                    loss_dict = self.model(imgs, tgts)
+                    loss = sum(loss_dict.values())
+
+                scaler.scale(loss).backward()
+                scaler.step(self.optimizer)
+                scaler.update()
+
+                # ---------------------- WARMUP POR STEP ----------------------
+                if global_step < warmup_steps:
+                    warmup_lr(self.optimizer, global_step, warmup_steps, base_lr)
+
+                global_step += 1
 
                 total_loss += loss.item()
                 iters += 1
@@ -303,27 +316,28 @@ class FasterRCNNTrainer:
             history["train_loss"].append(avg_loss)
             history["lr"].append(self.optimizer.param_groups[0]["lr"])
             epoch_time = time.time() - epoch_start
-            # scheduler step
-            self.scheduler.step()
 
-            # validation -> raw preds + COCOeval
+            # scheduler só roda DEPOIS do warmup terminar
+            if global_step >= warmup_steps:
+                self.scheduler.step()
+
+            # ---------------------- VALIDATION ----------------------
             raw_preds = self._get_raw_predictions(self.model, val_loader)
-            current_map, current_pr, current_recall = self._compute_metrics_from_raw(raw_preds, self.val_json)
-            
+            current_map, precision, recall = self._compute_metrics_from_raw(raw_preds, self.val_json)
+
             history["map"].append(current_map)
-            history["precision"].append(current_pr)
-            history["recall"].append(current_recall)
+            history["precision"].append(precision)
+            history["recall"].append(recall)
 
             print(f"Epoch {epoch}/{self.num_epochs} — Loss: {avg_loss:.4f} — mAP = {current_map:.4f} — time: {epoch_time:.1f}s")
-            self.save_checkpoint("last.pth")
             save_metrics(self.fold_dir, history)
+            torch.save(self.model.state_dict(), self.models_dir / "last.pth")
 
-            # checkpoint best
             if current_map > best_map:
                 best_map = current_map
                 patience_count = 0
-                best_path = self.save_checkpoint("best.pth")
-                print("Novo melhor modelo salvo (por mAP) ->", best_path)
+                torch.save(self.model.state_dict(), self.models_dir / "best.pth")
+                print("Novo melhor modelo salvo → best.pth")
             else:
                 patience_count += 1
                 print(f"Sem melhora ({patience_count}/{self.patience})")
@@ -332,10 +346,13 @@ class FasterRCNNTrainer:
                 print("\nEarly stopping ativado.")
                 break
 
-        # final
         save_metrics(self.fold_dir, history)
-        best_path = self.models_dir / "best.pth" if (self.models_dir / "best.pth").exists() else (self.models_dir / "last.pth")
-        print("\n🏁 Treinamento finalizado! Melhor mAP: {:.4f}".format(best_map))
-        print("Modelos salvos em:", str(self.models_dir))
 
+        best_path = (
+            self.models_dir / "best.pth"
+            if (self.models_dir / "best.pth").exists()
+            else (self.models_dir / "last.pth")
+        )
+
+        print(f"\nTreino finalizado! Melhor mAP={best_map:.4f}")
         return float(best_map), best_path

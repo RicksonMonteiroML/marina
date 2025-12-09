@@ -4,7 +4,7 @@ import json
 import shutil
 from datetime import datetime
 import yaml
-
+import copy
 from src.cross_validation.cross_validator import CrossValidator
 from src.trainer.trainer_factory import TrainerFactory
 
@@ -34,16 +34,21 @@ class TrainingPipeline:
         self.num_folds = self.cfg["cross_validation"]["num_folds"]
         self.seed = self.cfg["seed"]
 
-        # criar pasta do experimento
         timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M")
         self.run_dir = Path(f"experiments/{self.model_name}/run_{timestamp}")
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
-        # pasta unificada dos modelos
         self.models_dir = self.run_dir / "models"
         self.models_dir.mkdir(exist_ok=True)
 
         print(f"\nExperimento criado em: {self.run_dir}")
+
+        yaml_save_path = self.run_dir / "config.yaml"
+        with open(yaml_save_path, "w") as f:
+            yaml.dump(self.cfg, f)
+
+        print(f"Arquivo de configuração salvo em: {yaml_save_path}")
+
 
     # -------------------------------------------------------------------
     def run(self):
@@ -51,7 +56,7 @@ class TrainingPipeline:
 
         # Caminho para canonical.json
         canonical_json = self.cfg["dataset"]["canonical_json"]
-
+        print(f"Dataset: {canonical_json}")
 
         validator = CrossValidator(
             canonical_json=canonical_json,
@@ -81,8 +86,8 @@ class TrainingPipeline:
             val_json = fold_dir / "val.json"
 
             trainer = TrainerClass(
-                training_cfg=self.training_cfg,
-                model_cfg=self.model_cfg,
+                training_cfg=copy.deepcopy(self.training_cfg),
+                model_cfg=copy.deepcopy(self.model_cfg),
                 fold_dir=fold_dir,
                 train_json=train_json,
                 val_json=val_json

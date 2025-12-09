@@ -4,14 +4,13 @@ import numpy as np
 import torch
 from pathlib import Path
 import yaml
-
+import random, os
 
 def collate_fn(batch):
     return list(zip(*batch))
 
 
 def set_seed_everything(seed=42):
-    import random, os
     random.seed(seed)
     np.random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
