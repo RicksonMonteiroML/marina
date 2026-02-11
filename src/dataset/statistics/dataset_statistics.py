@@ -4,7 +4,12 @@ from typing import Dict, Any, List
 # Specialized statistics modules
 from src.dataset.statistics.class_distribution import ClassDistribution
 from src.dataset.statistics.bbox_distribution import BBoxDistribution
-from src.dataset.statistics.cooccurrence_matrix import CooccurrenceMatrix
+from src.dataset.statistics.coocurrence.matrix import CooccurrenceMatrix
+from src.dataset.statistics.coocurrence.probabilities import CooccurrenceProbabilities
+from src.dataset.statistics.coocurrence.association_metrics import CooccurrenceAssociationMetrics
+from src.dataset.statistics.coocurrence.clustering import CooccurrenceClustering
+
+
 
 
 class DatasetStatistics:
@@ -49,11 +54,29 @@ class DatasetStatistics:
                 annotations
             ),
 
-            "cooccurrence": CooccurrenceMatrix().compute(
-                images,
-                annotations,
-                categories
-            ),
+            "cooccurrence": {
+                "matrix": CooccurrenceMatrix().compute(
+                    images,
+                    annotations,
+                    categories
+                ),
+                "probabilities": CooccurrenceProbabilities().compute(
+                    images,
+                    annotations,
+                    categories
+                ),
+                "association": CooccurrenceAssociationMetrics().compute(
+                    images,
+                    annotations,
+                    categories
+                ),
+                "clustering": CooccurrenceClustering().compute(
+                    images,
+                    annotations,
+                    categories,
+                )
+            },
+
         }
 
     # ----------------------------------------------------------------------
@@ -122,4 +145,5 @@ class DatasetStatistics:
             "min": float(values.min()),
             "max": float(values.max()),
             "median": float(np.median(values)),
+            "raw_values": values.tolist()
         }

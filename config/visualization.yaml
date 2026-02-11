@@ -1,0 +1,35 @@
+# ------------------------------------------------------------
+# Visualization Pipeline Configuration
+# ------------------------------------------------------------
+
+# Path to canonical dataset (JSON format)
+dataset_path: data/canonical/canonical_dataset.json
+
+# Directory where generated figures will be saved
+output_dir: data/reports
+
+# ------------------------------------------------------------
+# Plot Options (optional toggles for future expansion)
+# ------------------------------------------------------------
+plots:
+
+  class_distribution: true
+  phi_heatmap: true
+  dendrogram: true
+
+# ------------------------------------------------------------
+# Clustering Options
+# ------------------------------------------------------------
+clustering:
+
+  # If null, dendrogram will be generated without cutting.
+  # If integer, dendrogram will be cut at n clusters.
+  n_clusters: null
+
+# ------------------------------------------------------------
+# Visualization Style Options
+# ------------------------------------------------------------
+style:
+
+  dpi: 300
+  save_format: png   # options: png, svg

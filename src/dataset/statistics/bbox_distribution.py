@@ -10,7 +10,11 @@ class BBoxDistribution:
     Includes:
         - width/height/area mean, median, std, min/max, quartiles
         - aspect ratio statistics
+        - spatial distribution (x_center, y_center)
         - safe handling of invalid values (n < 2, negative area)
+
+    Assumes COCO format bbox:
+        [x_min, y_min, width, height]
     """
 
     def compute(
@@ -25,15 +29,23 @@ class BBoxDistribution:
         heights = []
         areas = []
         aspect_ratios = []
+        x_centers = []
+        y_centers = []
 
         # -----------------------------------------------------------
-        # Extract width, height, area, ratio
+        # Extract width, height, area, ratio, and spatial center
         # -----------------------------------------------------------
         for ann in annotations:
-            _, _, w, h = ann["bbox"]
+            x_min, y_min, w, h = ann["bbox"]
 
             w = float(w)
             h = float(h)
+            x_min = float(x_min)
+            y_min = float(y_min)
+
+            # Compute center coordinates
+            x_center = x_min + w / 2.0
+            y_center = y_min + h / 2.0
 
             # Avoid division by zero for aspect ratio
             if h <= 0:
@@ -43,11 +55,15 @@ class BBoxDistribution:
             heights.append(h)
             areas.append(max(w * h, 0.0))
             aspect_ratios.append(w / h)
+            x_centers.append(x_center)
+            y_centers.append(y_center)
 
         widths = np.asarray(widths, dtype=float)
         heights = np.asarray(heights, dtype=float)
         areas = np.asarray(areas, dtype=float)
         aspect_ratios = np.asarray(aspect_ratios, dtype=float)
+        x_centers = np.asarray(x_centers, dtype=float)
+        y_centers = np.asarray(y_centers, dtype=float)
 
         # -----------------------------------------------------------
         # Safe std function
@@ -58,8 +74,8 @@ class BBoxDistribution:
         # -----------------------------------------------------------
         # Helper: quantiles
         # -----------------------------------------------------------
-        def q(arr, q):
-            return float(np.percentile(arr, q))
+        def q(arr, percentile):
+            return float(np.percentile(arr, percentile))
 
         return {
             "count": len(annotations),
@@ -107,4 +123,21 @@ class BBoxDistribution:
             "ratio_max": float(aspect_ratios.max()),
             "ratio_q1": q(aspect_ratios, 25),
             "ratio_q3": q(aspect_ratios, 75),
+
+            # -------------------------------------------------------
+            # Spatial statistics
+            # -------------------------------------------------------
+            "x_center_mean": float(x_centers.mean()),
+            "y_center_mean": float(y_centers.mean()),
+
+            # -------------------------------------------------------
+            # Raw values for visualization layer
+            # -------------------------------------------------------
+            "widths": widths.tolist(),
+            "heights": heights.tolist(),
+            "areas": areas.tolist(),
+            "aspect_ratios": aspect_ratios.tolist(),
+            "x_centers": x_centers.tolist(),
+            "y_centers": y_centers.tolist(),
+            "area_log": np.log1p(areas).tolist(),
         }

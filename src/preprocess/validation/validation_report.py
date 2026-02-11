@@ -60,10 +60,11 @@ class ValidationReport:
         if self.bbox_errors:
             lines.append(f"BBox Errors: {len(self.bbox_errors)}")
             for err in self.bbox_errors[:20]:
-                lines.append(
-                    f"  - {err['reason']} | bbox={err['bbox']} | \
-                        ann_id={err['annotation'].get('id')}"
-                )
+                print(err)
+                # lines.append(
+                #     f"  - {err['reason']} | bbox={err['bbox']} | \
+                #         ann_id={err['annotation'].get('id')}"
+                # )
             if len(self.bbox_errors) > 20:
                 lines.append(f"  ... {len(self.bbox_errors)-20} more")
 
