@@ -46,6 +46,7 @@ class DatasetStatistics:
             ),
 
             "bboxes": BBoxDistribution().compute(
+                images,
                 annotations
             ),
 

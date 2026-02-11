@@ -152,8 +152,12 @@ class VisualizationPipeline:
 
         widths = bbox_stats.get("widths")
         heights = bbox_stats.get("heights")
+        
         x_centers = bbox_stats.get("x_centers")
         y_centers = bbox_stats.get("y_centers")
+
+        x_centers_norm = bbox_stats.get("x_centers_norm")
+        y_centers_norm = bbox_stats.get("y_centers_norm")
 
         if widths and heights and x_centers and y_centers:
 
@@ -170,8 +174,8 @@ class VisualizationPipeline:
 
             if plot_cfg.get("bbox_spatial_heatmap", True):
                 diagnostics.plot_spatial_heatmap(
-                    x_centers,
-                    y_centers,
+                    x_centers_norm,
+                    y_centers_norm,
                     save_path=output_dir / "bbox_spatial_heatmap.png"
                 )
 
