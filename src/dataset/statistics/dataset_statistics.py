@@ -146,5 +146,5 @@ class DatasetStatistics:
             "min": float(values.min()),
             "max": float(values.max()),
             "median": float(np.median(values)),
-            "raw_values": values.tolist()
+            "values": values.tolist()
         }

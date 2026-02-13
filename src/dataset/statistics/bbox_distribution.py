@@ -36,8 +36,12 @@ class BBoxDistribution:
 
         widths = []
         heights = []
+
         areas = []
+        areas_norm = []
+
         aspect_ratios = []
+        category_ids = []
 
         x_centers = []
         y_centers = []
@@ -78,8 +82,9 @@ class BBoxDistribution:
             widths.append(w)
             heights.append(h)
             areas.append(max(w * h, 0.0))
+            areas_norm.append(max(w_n * h_n, 0.0))
             aspect_ratios.append(w / h)
-
+            category_ids.append(ann["category_id"])
             x_centers.append(x_center)
             y_centers.append(y_center)
 
@@ -93,6 +98,7 @@ class BBoxDistribution:
         widths = np.asarray(widths, dtype=float)
         heights = np.asarray(heights, dtype=float)
         areas = np.asarray(areas, dtype=float)
+        areas_norm = np.asarray(areas_norm, dtype=float)
         aspect_ratios = np.asarray(aspect_ratios, dtype=float)
 
         x_centers = np.asarray(x_centers, dtype=float)
@@ -143,6 +149,15 @@ class BBoxDistribution:
             "area_q1": q(areas, 25),
             "area_q3": q(areas, 75),
 
+            # ---------------- Area (normalized) ----------------
+            "area_norm_mean": float(areas_norm.mean()),
+            "area_norm_median": float(np.median(areas_norm)),
+            "area_norm_std": safe_std(areas_norm),
+            "area_norm_min": float(areas_norm.min()),
+            "area_norm_max": float(areas_norm.max()),
+            "area_norm_q1": q(areas_norm, 25),
+            "area_norm_q3": q(areas_norm, 75),
+
             # ---------------- Aspect Ratio ----------------
             "ratio_mean": float(aspect_ratios.mean()),
             "ratio_median": float(np.median(aspect_ratios)),
@@ -160,7 +175,9 @@ class BBoxDistribution:
             "widths": widths.tolist(),
             "heights": heights.tolist(),
             "areas": areas.tolist(),
+            "areas_norm": areas_norm.tolist(),
             "aspect_ratios": aspect_ratios.tolist(),
+            "category_ids": category_ids,
             "x_centers": x_centers.tolist(),
             "y_centers": y_centers.tolist(),
 

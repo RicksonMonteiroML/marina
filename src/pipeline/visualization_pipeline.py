@@ -3,6 +3,8 @@ from pathlib import Path
 import json
 import yaml
 import numpy as np
+import matplotlib.pyplot as plt
+
 
 from src.dataset.statistics.dataset_statistics import DatasetStatistics
 from src.dataset.visualization.distribution_plots import DistributionPlots
@@ -31,7 +33,14 @@ class VisualizationPipeline:
 
         data = self._load_dataset()
         stats = self._compute_statistics(data)
-        self._generate_plots(stats)
+        self._generate_plots(
+            stats=stats,
+            categories=data.get("categories", []),
+            pallette=self._create_pallette(
+                categories=data.get("categories", []),
+            )
+
+        )
 
         print("\nVisualizationPipeline completed successfully!\n")
 
@@ -59,11 +68,20 @@ class VisualizationPipeline:
         print("Statistics computed.")
         return stats
 
+    def _create_pallette(self, categories: list) -> dict:
+        base_colors = plt.cm.get_cmap("tab20").colors
+        palette = {}
+
+        for i, category in enumerate(categories):
+            class_name = category["name"]
+            palette[class_name] = base_colors[i % len(base_colors)]
+
+        return palette
+
     # -----------------------------------------------------------
     # Plot generation
     # -----------------------------------------------------------
-
-    def _generate_plots(self, stats: dict):
+    def _generate_plots(self, stats: dict, categories: dict, pallette: dict) -> None:
         print("Generating plots...")
 
         output_dir = Path(self.config["output_dir"])
@@ -76,7 +94,8 @@ class VisualizationPipeline:
         # -------------------------------------------------------
         if plot_cfg.get("class_distribution", True):
             DistributionPlots().plot_class_frequency(
-                stats["categories"]["distribution"],
+                distribution=stats["categories"]["distribution"],
+                pallette=pallette,
                 save_path=output_dir / "class_distribution.png",
             )
 
@@ -127,13 +146,23 @@ class VisualizationPipeline:
         # 4️⃣ Basic Bounding Box Plots
         # -------------------------------------------------------
         bbox_stats = stats.get("bboxes", {})
+        bbox_per_image_stats = stats.get("bboxes_per_image", {})
         bbox_plotter = BBoxPlots()
 
+        if plot_cfg.get("bboxes_per_image", True):
+            values = bbox_per_image_stats.get("values")
+            if values:
+                bbox_plotter.plot_bboxes_per_image(
+                    values,
+                    save_path=output_dir / "bboxes_per_image.png",
+                )
+
         if plot_cfg.get("bbox_area_distribution", True):
-            areas = bbox_stats.get("areas")
-            if areas:
+            areas_norm = bbox_stats.get("areas_norm")
+            if areas_norm:
                 bbox_plotter.plot_bbox_area_distribution(
-                    areas,
+                    areas_norm,
+                    normalized=True,
                     save_path=output_dir / "bbox_area_distribution.png",
                 )
 
@@ -152,6 +181,9 @@ class VisualizationPipeline:
 
         widths = bbox_stats.get("widths")
         heights = bbox_stats.get("heights")
+
+        widths_norm = bbox_stats.get("widths_norm")
+        heights_norm = bbox_stats.get("heights_norm")
         
         x_centers = bbox_stats.get("x_centers")
         y_centers = bbox_stats.get("y_centers")
@@ -164,10 +196,10 @@ class VisualizationPipeline:
             if plot_cfg.get("bbox_pairplot", True):
                 diagnostics.plot_pairplot(
                     {
-                        "x": x_centers,
-                        "y": y_centers,
-                        "width": widths,
-                        "height": heights,
+                        "x": x_centers_norm,
+                        "y": y_centers_norm,
+                        "width": widths_norm,
+                        "height": heights_norm,
                     },
                     save_path=output_dir / "bbox_pairplot.png"
                 )
@@ -181,9 +213,30 @@ class VisualizationPipeline:
 
             if plot_cfg.get("bbox_wh_density", True):
                 diagnostics.plot_width_height_density(
-                    widths,
-                    heights,
+                    widths_norm,
+                    heights_norm,
                     save_path=output_dir / "bbox_wh_density.png"
                 )
 
         print(f"Plots saved to {output_dir}")
+
+        # -------------------------------------------------------
+        # 6️⃣ Centered Normalized Overlay
+        # -------------------------------------------------------
+
+        if plot_cfg.get("bbox_centered_overlay", True):
+
+            category_ids = bbox_stats.get("category_ids")
+            widths_norm = bbox_stats.get("widths_norm")
+            heights_norm = bbox_stats.get("heights_norm")
+
+            if widths_norm and heights_norm and category_ids:
+
+                diagnostics.plot_centered_overlay_by_class(
+                    widths_norm=widths_norm,
+                    heights_norm=heights_norm,
+                    class_ids=category_ids,
+                    class_id_to_name={item['id']: item['name'] for item in categories},
+                    palette=pallette,
+                    save_path=output_dir / "bbox_centered_overlay.png"
+                )

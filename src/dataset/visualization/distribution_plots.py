@@ -8,16 +8,28 @@ class DistributionPlots(BasePlot):
     def plot_class_frequency(
         self,
         distribution: Dict[str, int],
+        pallette,
         save_path: str | None = None,
         log_scale: bool = False,
+        sort: bool = True,
     ) -> None:
 
         self._setup_figure()
 
+        if sort:
+            distribution = dict(
+                sorted(
+                    distribution.items(),
+                    key=lambda x: x[1],
+                    reverse=True
+                )
+            )
+
         classes = list(distribution.keys())
         values = list(distribution.values())
 
-        plt.bar(classes, values)
+        colors = [pallette.get(label) for label in classes]
+        plt.bar(classes, values, color=colors)
 
         if log_scale:
             plt.yscale("log")

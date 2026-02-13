@@ -23,7 +23,7 @@ class BBoxPlots(BasePlot):
         self,
         values: Sequence[float],
         save_path=None,
-        bins: int = 30,
+        bins: int = 50,
     ) -> None:
 
         self._setup_figure()
@@ -44,6 +44,7 @@ class BBoxPlots(BasePlot):
         areas: Sequence[float],
         save_path=None,
         bins: int = 40,
+        normalized: bool = True,
         log_scale: bool = False,
     ) -> None:
 
@@ -55,9 +56,12 @@ class BBoxPlots(BasePlot):
             plt.xscale("log")
 
         plt.title("Bounding Box Area Distribution")
-        plt.xlabel("Area (pixels²)")
-        plt.ylabel("Frequency")
+        if normalized:
+            plt.xlabel("Area (normalized)")
+        else:
+            plt.xlabel("Area (pixels²)")
 
+        plt.ylabel("Frequency")
         self._finalize(save_path)
 
     # -----------------------------------------------------------
