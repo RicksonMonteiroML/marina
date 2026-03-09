@@ -1,86 +1,75 @@
 alias_map:
 
-  alga:
-    - alga
-    - algas
-    - algae
+  planktonic_foraminifer:
+    - planctonico
+    - planctônico
+    - plancton
+    - planktonic foraminifer
 
-  bentonico:
+  benthic_foraminifer:
     - bentonico
     - bentônico
     - benthonico
+    - benthic foraminifer
 
-  bioconstrutor:
-    - bioconstrutor
-    - bio-construtor
+  ostracod:
+    - ostracoda
+    - ostracode
+    - ostracod
 
-  bivalvia:
+  gastropod:
+    - gastropoda
+    - gastrópode
+    - gastropode
+    - gastropod
+
+  bivalve:
     - bivalvia
     - bivalve
     - bivalves
 
-  bryozoa:
+  scaphopod:
+    - scaphopoda
+    - escafopode
+    - scaphopod
+
+  echinoid_spine:
+    - echinoidea
+    - equinoidea
+    - echinoid spine
+
+  bryozoan:
     - bryozoa
     - briozoa
+    - bioconstrutor
+    - bio-construtor
+    - bryozoan
 
-  crustacea:
+  microfossil_fragment:
+    - fragmento de microfossil
+    - fragmento de microfóssil
+    - fragmento microfossil
+    - fragmento microfóssil
     - crustacea
     - crustaceo
     - crustáceo
     - crustaceos
     - crustáceos
 
-  dente:
-    - dente
-    - dentes
-    - tooth
-
-  diatomacea:
-    - diatomacea
-    - diatomaceas
-    - diatomácea
-    - diatomáceas
-
-  echinoidea:
-    - echinoidea
-    - equinoidea
-
-  fragmento_de_microfossil:
-    - fragmento de microfossil
-    - fragmento de microfóssil
-    - fragmento microfossil
-    - fragmento microfóssil
-
-  gastropoda:
-    - gastropoda
-    - gastrópode
-    - gastropode
-
-  microfossil_desconhecido:
+  miscellaneous:
     - microfossil desconhecido
     - microfóssil desconhecido
     - fossil desconhecido
     - microfossil indiferenciado
     - microfóssil indiferenciado
     - fossil indiferenciado
-
-  ostracoda:
-    - ostracoda
-    - ostracode
-
-  planctonico:
-    - planctonico
-    - planctônico
-    - plancton
-
-  porifera:
+    - dente
+    - dentes
+    - tooth
     - porifera
     - porífero
-
-  radiolaria:
-    - radiolaria
-    - radiolario
-
-  scaphopoda:
-    - scaphopoda
-    - escafopode
+    - diatomacea
+    - diatomaceas
+    - diatomácea
+    - diatomáceas
+    - charophyta
